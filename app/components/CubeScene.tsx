@@ -1,6 +1,7 @@
 'use client'
 import { useEffect, useRef } from 'react'
 import * as THREE from 'three'
+import { createCube, Cell } from './Cube';
 
 export default function Page() {
   const ref = useRef<HTMLDivElement>(null)
@@ -12,20 +13,31 @@ export default function Page() {
     renderer.setSize(window.innerWidth, window.innerHeight)
     ref.current!.appendChild(renderer.domElement)
 
-    const cubes: THREE.Mesh[] = []
+    const ROWS = 3;
+    const COLS = 3;
+    const grid: Cell[] = [
+	{ elevated: false, color: 0xffffff },	
+	{ elevated: false, color: 0xffffff },	
+	{ elevated: false, color: 0xffffff },	
+	{ elevated: false, color: 0xffffff },	
+	{ elevated: true, color: 0xffffff },	
+	{ elevated: false, color: 0x00ffff },	
+	{ elevated: false, color: 0xffffff },	
+	{ elevated: true, color: 0xffffff },	
+	{ elevated: false, color: 0xffffff },	
 
-    for (let row = 0; row < 3; row++) {
-      for (let col = 0; col < 3; col++) {
-        const cube = new THREE.Mesh(
-          new THREE.BoxGeometry(),
-          new THREE.MeshBasicMaterial({ color: 0x00ff00 })
-        )
-        cube.position.x = (col - 1) * 2.5
-        cube.position.y = (row - 1) * 2.5
-        scene.add(cube)
-        cubes.push(cube)
-      }
-    }
+    ]
+
+   const cubes: THREE.Mesh[] = []
+
+   for (let row = 0; row < ROWS; row++){
+	for (let col = 0; col < COLS; col++){
+		const cube = createCube(grid[row * COLS + col], col, row)
+		scene.add(cube)
+		cubes.push(cube)
+	}
+   }
+
 
     camera.position.z = 10
 
