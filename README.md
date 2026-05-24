@@ -1,4 +1,6 @@
 This is a work-in-progess.
+<img width="1075" height="802" alt="image" src="https://github.com/user-attachments/assets/27aca6c6-fe14-4440-9f0b-8347baa235c7" />
+
 
 # Goal
 I don't want to give away too much what this project is, and the actual goal should become apparent when changes come along, which are obviously public and will be reflected in the codebase and in this README/other READMEs (when I get around to writing them). 
