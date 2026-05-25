@@ -7,8 +7,7 @@ I don't want to give away too much what this project is, and the actual goal sho
 This is not a work-related project, and this is a learning exercise.
 
 ## Current goals (checklist?) 
-1. Amend camera controls to disable panning (this will eventually be done automatically when needed, according to design).
-2. Add functionality to make map react to user input, how they move the mouse around the globe etc.
+1. 
 
 ## Ongoing goals
 1. Ensure the whole app (exactly the same as production) can always be ran in one/minimal commands. 
