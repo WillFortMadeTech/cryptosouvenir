@@ -284,16 +284,30 @@ function startAnimation(
   return () => { cancelAnimationFrame(animId); renderer.dispose() }
 }
 
+const VIGNETTE_START = 11
+const VIGNETTE_END   = 7
+
 export default function CubeScene() {
-  const ref = useRef<HTMLDivElement>(null)
+  const ref        = useRef<HTMLDivElement>(null)
+  const vignetteRef = useRef<HTMLDivElement>(null)
 
   useEffect(() => {
     const init = async () => {
       const { scene, camera, renderer, controls } = setupRenderer(ref.current!)
       const { mesh, positions } = await buildGlobe(scene)
 
+      const updateVignette = () => {
+        if (!vignetteRef.current) return
+        const dist = camera.position.length()
+        const intensity = Math.max(0, Math.min(1, (VIGNETTE_START - dist) / (VIGNETTE_START - VIGNETTE_END)))
+        vignetteRef.current.style.opacity = String(intensity * 0.85)
+      }
+
       if (SHOW_HEMISPHERE_COLORS) updateHemisphereColors(mesh, positions, scene, camera)
-      const onCameraChange = () => { if (SHOW_HEMISPHERE_COLORS) updateHemisphereColors(mesh, positions, scene, camera) }
+      const onCameraChange = () => {
+        if (SHOW_HEMISPHERE_COLORS) updateHemisphereColors(mesh, positions, scene, camera)
+        updateVignette()
+      }
       controls.addEventListener('change', onCameraChange)
 
       const activeVoxels = new Map<number, VoxelState>()
@@ -316,5 +330,17 @@ export default function CubeScene() {
     return () => { cleanup.then(fn => fn()) }
   }, [])
 
-  return <div ref={ref} />
+  return (
+    <div style={{ position: 'relative' }}>
+      <div ref={ref} />
+      <div ref={vignetteRef} style={{
+        position: 'absolute',
+        inset: 0,
+        pointerEvents: 'none',
+        background: 'radial-gradient(ellipse at center, transparent 40%, black 100%)',
+        opacity: 0,
+        transition: 'opacity 0.15s ease',
+      }} />
+    </div>
+  )
 }
