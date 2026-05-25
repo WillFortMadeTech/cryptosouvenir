@@ -28,6 +28,8 @@ async function buildGlobe(scene: THREE.Scene) {
   const landCount = grid.filter((c: Cell) => c.elevated).length
   const mesh = new THREE.InstancedMesh(geometry, material, landCount)
 
+  const positions: THREE.Vector3[] = []
+  const baseColor = new THREE.Color(CUBE_COLOR)
   const matrix = new THREE.Matrix4()
   let i = 0
   for (let row = 0; row < GRID_ROWS; row++) {
@@ -37,15 +39,34 @@ async function buildGlobe(scene: THREE.Scene) {
       const lat = (row / GRID_ROWS) * Math.PI - Math.PI / 2
       const lng = (col / GRID_COLS) * Math.PI * 2 - Math.PI
       const radius = 5
-      matrix.setPosition(
-        radius * Math.cos(lat) * Math.cos(lng),
-        radius * Math.sin(lat),
-        radius * Math.cos(lat) * Math.sin(lng)
-      )
-      mesh.setMatrixAt(i++, matrix)
+      const x = radius * Math.cos(lat) * Math.cos(lng)
+      const y = radius * Math.sin(lat)
+      const z = radius * Math.cos(lat) * Math.sin(lng)
+      matrix.setPosition(x, y, z)
+      mesh.setMatrixAt(i, matrix)
+      mesh.setColorAt(i, baseColor)
+      positions.push(new THREE.Vector3(x, y, z))
+      i++
     }
   }
   scene.add(mesh)
+  return { mesh, positions }
+}
+
+const blueColor = new THREE.Color(0x0044ff)
+const baseColor = new THREE.Color(CUBE_COLOR)
+
+function updateHemisphereColors(
+  mesh: THREE.InstancedMesh,
+  positions: THREE.Vector3[],
+  scene: THREE.Scene,
+  camera: THREE.PerspectiveCamera
+) {
+  const localCamPos = scene.worldToLocal(camera.position.clone())
+  for (let i = 0; i < positions.length; i++) {
+    mesh.setColorAt(i, positions[i].dot(localCamPos) > 25 ? blueColor : baseColor)
+  }
+  mesh.instanceColor!.needsUpdate = true
 }
 
 function startAnimation(
@@ -73,8 +94,17 @@ export default function CubeScene() {
   useEffect(() => {
     const init = async () => {
       const { scene, camera, renderer, controls } = setupRenderer(ref.current!)
-      await buildGlobe(scene)
-      return startAnimation(renderer, scene, camera, controls)
+      const { mesh, positions } = await buildGlobe(scene)
+
+      updateHemisphereColors(mesh, positions, scene, camera)
+      const onCameraChange = () => updateHemisphereColors(mesh, positions, scene, camera)
+      controls.addEventListener('change', onCameraChange)
+
+      const stopAnimation = startAnimation(renderer, scene, camera, controls)
+      return () => {
+        controls.removeEventListener('change', onCameraChange)
+        stopAnimation()
+      }
     }
     const cleanup = init()
     return () => { cleanup.then(fn => fn()) }
