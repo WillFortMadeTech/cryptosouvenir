@@ -397,11 +397,14 @@ export default function CubeScene() {
       // Camera panel animation — disabled controls while animating to avoid OrbitControls fighting lerp
       const PANEL_POS  = new THREE.Vector3(-3, 0, 20)
       const PANEL_LOOK = new THREE.Vector3(-7, 0, 0)
+      // Direction the selected cube should face in world space: upper-middle from camera's view
+      const PANEL_CUBE_DIR = PANEL_POS.clone().normalize().add(new THREE.Vector3(0, 1, 0)).normalize()
       const camAnim = {
         active: false,
         inPanel: false,
         targetPos: new THREE.Vector3(0, 0, 15),
         targetLook: new THREE.Vector3(0, 0, 0),
+        targetQ: scene.quaternion.clone(),
       }
 
       const tickCameraAnim = () => {
@@ -409,6 +412,7 @@ export default function CubeScene() {
         camera.position.lerp(camAnim.targetPos, 0.06)
         controls.target.lerp(camAnim.targetLook, 0.06)
         camera.lookAt(controls.target)
+        scene.quaternion.slerp(camAnim.targetQ, 0.06)
         updateVignette()
         updateHighlight()
         if (
@@ -429,6 +433,8 @@ export default function CubeScene() {
         const dx = e.clientX - downX, dy = e.clientY - downY
         if (dx * dx + dy * dy > 25) return
         if (camAnim.inPanel || highlightRef.current === -1) return
+        const localDir = positions[highlightRef.current].clone().normalize()
+        camAnim.targetQ.setFromUnitVectors(localDir, PANEL_CUBE_DIR)
         camAnim.inPanel = true
         controls.enabled = false
         setTimeout(() => {
