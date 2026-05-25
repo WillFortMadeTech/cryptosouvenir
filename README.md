@@ -1,5 +1,6 @@
 This is a work-in-progess.
-<img width="1075" height="802" alt="image" src="https://github.com/user-attachments/assets/27aca6c6-fe14-4440-9f0b-8347baa235c7" />
+<img width="1107" height="1023" alt="image" src="https://github.com/user-attachments/assets/8dd5546e-704e-4ec4-b1d8-b8b14d1596b7" />
+
 
 
 # Goal
