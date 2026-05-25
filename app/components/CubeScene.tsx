@@ -394,9 +394,57 @@ export default function CubeScene() {
       }
       window.addEventListener('resize', onResize)
 
+      // Camera panel animation — disabled controls while animating to avoid OrbitControls fighting lerp
+      const PANEL_POS  = new THREE.Vector3(-3, 0, 20)
+      const PANEL_LOOK = new THREE.Vector3(-7, 0, 0)
+      const camAnim = {
+        active: false,
+        inPanel: false,
+        targetPos: new THREE.Vector3(0, 0, 15),
+        targetLook: new THREE.Vector3(0, 0, 0),
+      }
+
+      const tickCameraAnim = () => {
+        if (!camAnim.active) return
+        camera.position.lerp(camAnim.targetPos, 0.06)
+        controls.target.lerp(camAnim.targetLook, 0.06)
+        camera.lookAt(controls.target)
+        updateVignette()
+        updateHighlight()
+        if (
+          camera.position.distanceTo(camAnim.targetPos) < 0.02 &&
+          controls.target.distanceTo(camAnim.targetLook) < 0.02
+        ) {
+          camera.position.copy(camAnim.targetPos)
+          controls.target.copy(camAnim.targetLook)
+          camera.lookAt(controls.target)
+          camAnim.active = false
+          if (!camAnim.inPanel) controls.enabled = true
+        }
+      }
+
+      let downX = 0, downY = 0
+      const onPointerDown = (e: PointerEvent) => { downX = e.clientX; downY = e.clientY }
+      const onPointerUp = (e: PointerEvent) => {
+        const dx = e.clientX - downX, dy = e.clientY - downY
+        if (dx * dx + dy * dy > 25) return
+        if (camAnim.inPanel || highlightRef.current === -1) return
+        camAnim.inPanel = true
+        controls.enabled = false
+        setTimeout(() => {
+          camAnim.active = true
+          camAnim.targetPos.copy(PANEL_POS)
+          camAnim.targetLook.copy(PANEL_LOOK)
+        }, 150)
+      }
+
+      renderer.domElement.addEventListener('pointerdown', onPointerDown)
+      renderer.domElement.addEventListener('pointerup', onPointerUp)
+
       const stopHover = setupHover(renderer, camera, scene, packets, cursorRef, updateHighlight)
       const stopRipple = setupRippleClick(renderer.domElement, camera, scene, ripples)
       const stopAnimation = startAnimation(renderer, scene, camera, controls, () => {
+        tickCameraAnim()
         tickRipples(ripples, positions, rippleVoxels, camera, scene)
         tickWaveSimulation(mesh, positions, scene, camera, activeVoxels, packets, hoverVoxels, cursorRef, rippleVoxels)
       })
@@ -404,6 +452,8 @@ export default function CubeScene() {
       return () => {
         window.removeEventListener('resize', onResize)
         controls.removeEventListener('change', onCameraChange)
+        renderer.domElement.removeEventListener('pointerdown', onPointerDown)
+        renderer.domElement.removeEventListener('pointerup', onPointerUp)
         stopHover()
         stopRipple()
         stopAnimation()

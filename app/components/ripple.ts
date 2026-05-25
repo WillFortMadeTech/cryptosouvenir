@@ -86,6 +86,7 @@ export function setupRippleClick(
     const dx = e.clientX - downX
     const dy = e.clientY - downY
     if (dx * dx + dy * dy > 25) return
+    if (ripples.length > 0) return
 
     mouse.x = (e.clientX / window.innerWidth) * 2 - 1
     mouse.y = -(e.clientY / window.innerHeight) * 2 + 1
