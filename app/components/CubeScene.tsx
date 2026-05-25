@@ -19,6 +19,11 @@ const MIN_SPEED         = 0.003
 const HOVER_RADIUS_SQ   = 0.12
 const HOVER_MAX         = 0.25
 const HOVER_LERP        = 0.18
+const VIGNETTE_START    = 11
+const VIGNETTE_END      = 7
+const HIGHLIGHT_ZOOM    = 8
+
+const highlightColor = new THREE.Color().setHSL(Math.random(), 1.0, 0.55)
 
 interface WavePacket {
   pos: THREE.Vector3
@@ -111,6 +116,10 @@ function tickWaveSimulation(
 ) {
   if (packets.length === 0 && activeVoxels.size === 0 && hoverVoxels.size === 0) return
 
+  const dist = camera.position.length()
+  const waveScale = Math.max(0, Math.min(1, (dist - VIGNETTE_END) / (VIGNETTE_START - VIGNETTE_END)))
+  const effectiveExtrude = EXTRUDE * waveScale
+
   _invMat.copy(scene.matrixWorld).invert()
   _localCam.copy(camera.position).applyMatrix4(_invMat)
 
@@ -145,7 +154,7 @@ function tickWaveSimulation(
     t += v
 
     _voxelDir.copy(positions[id]).normalize()
-    _voxelPos.copy(positions[id]).addScaledVector(_voxelDir, EXTRUDE * Math.max(0, t))
+    _voxelPos.copy(positions[id]).addScaledVector(_voxelDir, effectiveExtrude * Math.max(0, t))
     _voxelMat.setPosition(_voxelPos)
     mesh.setMatrixAt(id, _voxelMat)
 
@@ -179,7 +188,7 @@ function tickWaveSimulation(
     const waveT = activeVoxels.get(id)?.[0] ?? 0
 
     _voxelDir.copy(positions[id]).normalize()
-    _voxelPos.copy(positions[id]).addScaledVector(_voxelDir, EXTRUDE * (Math.max(0, waveT) + newHt))
+    _voxelPos.copy(positions[id]).addScaledVector(_voxelDir, effectiveExtrude * (Math.max(0, waveT) + newHt))
     _voxelMat.setPosition(_voxelPos)
     mesh.setMatrixAt(id, _voxelMat)
 
@@ -211,7 +220,8 @@ function setupHover(
   camera: THREE.PerspectiveCamera,
   scene: THREE.Scene,
   packets: WavePacket[],
-  cursorRef: { current: THREE.Vector3 | null }
+  cursorRef: { current: THREE.Vector3 | null },
+  onCursorChange: () => void
 ) {
   const raycaster   = new THREE.Raycaster()
   const mouse       = new THREE.Vector2()
@@ -239,9 +249,10 @@ function setupHover(
     localOrigin.copy(raycaster.ray.origin).applyMatrix4(invMat)
     localDir.copy(raycaster.ray.direction).transformDirection(invMat)
 
-    if (!raySphereHit(localOrigin, localDir, hitPoint)) { prevHitValid = false; cursorRef.current = null; return }
+    if (!raySphereHit(localOrigin, localDir, hitPoint)) { prevHitValid = false; cursorRef.current = null; onCursorChange(); return }
 
     cursorRef.current = hitPoint.clone()
+    onCursorChange()
 
     if (prevHitValid && packets.length < MAX_PACKETS) {
       const vel = hitPoint.clone().sub(prevHit).multiplyScalar(WAVE_SPEED_SCALE)
@@ -254,7 +265,7 @@ function setupHover(
     prevHitValid = true
   }
 
-  const onMouseLeave = () => { cursorRef.current = null }
+  const onMouseLeave = () => { cursorRef.current = null; onCursorChange() }
 
   renderer.domElement.addEventListener('mousemove', onMouseMove)
   renderer.domElement.addEventListener('mouseleave', onMouseLeave)
@@ -284,11 +295,8 @@ function startAnimation(
   return () => { cancelAnimationFrame(animId); renderer.dispose() }
 }
 
-const VIGNETTE_START = 11
-const VIGNETTE_END   = 7
-
 export default function CubeScene() {
-  const ref        = useRef<HTMLDivElement>(null)
+  const ref         = useRef<HTMLDivElement>(null)
   const vignetteRef = useRef<HTMLDivElement>(null)
 
   useEffect(() => {
@@ -296,31 +304,80 @@ export default function CubeScene() {
       const { scene, camera, renderer, controls } = setupRenderer(ref.current!)
       const { mesh, positions } = await buildGlobe(scene)
 
+      const activeVoxels = new Map<number, VoxelState>()
+      const hoverVoxels  = new Map<number, number>()
+      const packets: WavePacket[] = []
+      const cursorRef: { current: THREE.Vector3 | null } = { current: null }
+      const highlightRef = { current: -1 }
+
+      const getVoxelBaseColor = (id: number, localCam: THREE.Vector3) => {
+        if (SHOW_HEMISPHERE_COLORS && positions[id].dot(localCam) > SPHERE_RADIUS_SQ) return blueColor
+        return baseColor
+      }
+
+      const updateHighlight = () => {
+        const dist = camera.position.length()
+        _invMat.copy(scene.matrixWorld).invert()
+        _localCam.copy(camera.position).applyMatrix4(_invMat)
+
+        if (dist >= HIGHLIGHT_ZOOM || !cursorRef.current) {
+          if (highlightRef.current !== -1) {
+            mesh.setColorAt(highlightRef.current, getVoxelBaseColor(highlightRef.current, _localCam))
+            mesh.instanceColor!.needsUpdate = true
+            highlightRef.current = -1
+          }
+          return
+        }
+
+        let minDistSq = Infinity
+        let newId = -1
+        for (let i = 0; i < positions.length; i++) {
+          if (positions[i].dot(_localCam) <= SPHERE_RADIUS_SQ) continue
+          _diff.subVectors(positions[i], cursorRef.current)
+          const d = _diff.lengthSq()
+          if (d < minDistSq) { minDistSq = d; newId = i }
+        }
+
+        if (newId === highlightRef.current) return
+
+        if (highlightRef.current !== -1)
+          mesh.setColorAt(highlightRef.current, getVoxelBaseColor(highlightRef.current, _localCam))
+        if (newId !== -1)
+          mesh.setColorAt(newId, highlightColor)
+
+        highlightRef.current = newId
+        mesh.instanceColor!.needsUpdate = true
+      }
+
       const updateVignette = () => {
         if (!vignetteRef.current) return
         const dist = camera.position.length()
         const intensity = Math.max(0, Math.min(1, (VIGNETTE_START - dist) / (VIGNETTE_START - VIGNETTE_END)))
-        vignetteRef.current.style.opacity = String(intensity * 0.85)
+        vignetteRef.current.style.opacity = String(intensity * 0.7)
       }
 
       if (SHOW_HEMISPHERE_COLORS) updateHemisphereColors(mesh, positions, scene, camera)
       const onCameraChange = () => {
         if (SHOW_HEMISPHERE_COLORS) updateHemisphereColors(mesh, positions, scene, camera)
         updateVignette()
+        updateHighlight()
       }
       controls.addEventListener('change', onCameraChange)
 
-      const activeVoxels = new Map<number, VoxelState>()
-      const hoverVoxels  = new Map<number, number>()
-      const packets: WavePacket[] = []
-      const cursorRef: { current: THREE.Vector3 | null } = { current: null }
+      const onResize = () => {
+        renderer.setSize(window.innerWidth, window.innerHeight)
+        camera.aspect = window.innerWidth / window.innerHeight
+        camera.updateProjectionMatrix()
+      }
+      window.addEventListener('resize', onResize)
 
-      const stopHover = setupHover(renderer, camera, scene, packets, cursorRef)
+      const stopHover = setupHover(renderer, camera, scene, packets, cursorRef, updateHighlight)
       const stopAnimation = startAnimation(renderer, scene, camera, controls, () =>
         tickWaveSimulation(mesh, positions, scene, camera, activeVoxels, packets, hoverVoxels, cursorRef)
       )
 
       return () => {
+        window.removeEventListener('resize', onResize)
         controls.removeEventListener('change', onCameraChange)
         stopHover()
         stopAnimation()
@@ -337,7 +394,7 @@ export default function CubeScene() {
         position: 'absolute',
         inset: 0,
         pointerEvents: 'none',
-        background: 'radial-gradient(ellipse at center, transparent 40%, black 100%)',
+        background: 'radial-gradient(ellipse at center, transparent 20%, black 75%)',
         opacity: 0,
         transition: 'opacity 0.15s ease',
       }} />

@@ -4,4 +4,4 @@ export const GRID_COLS = 800;
 export const CUBE_SIZE = 0.01;
 export const CUBE_COLOR = 0xffffff;
 
-export const SHOW_HEMISPHERE_COLORS = false;
+export const SHOW_HEMISPHERE_COLORS = true;
