@@ -18,7 +18,7 @@ export async function GET() {
 			const x = Math.floor((col / GRID_COLS) * info.width);
 			const y = Math.floor((row / GRID_ROWS) * info.height);
 			const i = (y * info.width + x) * info.channels;
-			const isLand = data[i + 3] > 128
+			const isLand = data[i] < 128
 
 			cells.push({ elevated: isLand, color: isLand ? 0x22cc88 : null })
 		}
