@@ -1,7 +1,7 @@
 'use client'
 import { useEffect, useRef } from 'react'
 import { OrbitControls } from 'three/examples/jsm/controls/OrbitControls.js'
-import { GRID_ROWS, GRID_COLS, CUBE_SIZE, CUBE_COLOR, SHOW_HEMISPHERE_COLORS } from '@/lib/constants'
+import { CUBE_SIZE, CUBE_COLOR, SHOW_HEMISPHERE_COLORS } from '@/lib/constants'
 import * as THREE from 'three'
 import { Cell } from './Cube'
 import { type Ripple, tickRipples, setupRippleClick } from './ripple'
@@ -51,31 +51,23 @@ function setupRenderer(container: HTMLDivElement) {
 }
 
 async function buildGlobe(scene: THREE.Scene) {
-  const grid: Cell[] = await fetch('/api/grid').then(r => r.json())
+  const cells: Cell[] = await fetch('/api/grid').then(r => r.json())
   const geometry = new THREE.BoxGeometry(CUBE_SIZE, CUBE_SIZE, CUBE_SIZE)
   const material = new THREE.MeshBasicMaterial({ color: CUBE_COLOR })
-  const landCount = grid.filter((c: Cell) => c.elevated).length
-  const mesh = new THREE.InstancedMesh(geometry, material, landCount)
+  const mesh = new THREE.InstancedMesh(geometry, material, cells.length)
 
   const positions: THREE.Vector3[] = []
   const baseColor = new THREE.Color(CUBE_COLOR)
   const matrix = new THREE.Matrix4()
-  let i = 0
-  for (let row = 0; row < GRID_ROWS; row++) {
-    for (let col = 0; col < GRID_COLS; col++) {
-      const cell = grid[row * GRID_COLS + col]
-      if (!cell.elevated) continue
-      const lat = (row / GRID_ROWS) * Math.PI - Math.PI / 2
-      const lng = (col / GRID_COLS) * Math.PI * 2 - Math.PI
-      const x = SPHERE_RADIUS * Math.cos(lat) * Math.cos(lng)
-      const y = SPHERE_RADIUS * Math.sin(lat)
-      const z = SPHERE_RADIUS * Math.cos(lat) * Math.sin(lng)
-      matrix.setPosition(x, y, z)
-      mesh.setMatrixAt(i, matrix)
-      mesh.setColorAt(i, baseColor)
-      positions.push(new THREE.Vector3(x, y, z))
-      i++
-    }
+  for (let i = 0; i < cells.length; i++) {
+    const { lat, lng } = cells[i]
+    const x = SPHERE_RADIUS * Math.cos(lat) * Math.cos(lng)
+    const y = SPHERE_RADIUS * Math.sin(lat)
+    const z = SPHERE_RADIUS * Math.cos(lat) * Math.sin(lng)
+    matrix.setPosition(x, y, z)
+    mesh.setMatrixAt(i, matrix)
+    mesh.setColorAt(i, baseColor)
+    positions.push(new THREE.Vector3(x, y, z))
   }
   scene.add(mesh)
   return { mesh, positions }
