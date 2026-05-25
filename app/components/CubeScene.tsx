@@ -4,6 +4,7 @@ import { OrbitControls } from 'three/examples/jsm/controls/OrbitControls.js'
 import { GRID_ROWS, GRID_COLS, CUBE_SIZE, CUBE_COLOR, SHOW_HEMISPHERE_COLORS } from '@/lib/constants'
 import * as THREE from 'three'
 import { Cell } from './Cube'
+import { type Ripple, tickRipples, setupRippleClick } from './ripple'
 
 const EXTRUDE           = 0.05
 const SPHERE_RADIUS     = 5
@@ -112,9 +113,10 @@ function tickWaveSimulation(
   activeVoxels: Map<number, VoxelState>,
   packets: WavePacket[],
   hoverVoxels: Map<number, number>,
-  cursorRef: { current: THREE.Vector3 | null }
+  cursorRef: { current: THREE.Vector3 | null },
+  rippleVoxels: Map<number, VoxelState>
 ) {
-  if (packets.length === 0 && activeVoxels.size === 0 && hoverVoxels.size === 0) return
+  if (packets.length === 0 && activeVoxels.size === 0 && hoverVoxels.size === 0 && rippleVoxels.size === 0) return
 
   const dist = camera.position.length()
   const waveScale = Math.max(0, Math.min(1, (dist - VIGNETTE_END) / (VIGNETTE_START - VIGNETTE_END)))
@@ -147,14 +149,24 @@ function tickWaveSimulation(
     }
   }
 
+  for (const [id, s] of rippleVoxels) {
+    let [t, v] = s
+    v -= t * SPRING_K
+    v *= SPRING_DAMPING
+    t += v
+    if (Math.abs(t) < 0.0005 && Math.abs(v) < 0.0005) { rippleVoxels.delete(id) }
+    else { s[0] = t; s[1] = v }
+  }
+
   for (const [id, s] of activeVoxels) {
     let [t, v] = s
     v -= t * SPRING_K
     v *= SPRING_DAMPING
     t += v
 
+    const rT = rippleVoxels.get(id)?.[0] ?? 0
     _voxelDir.copy(positions[id]).normalize()
-    _voxelPos.copy(positions[id]).addScaledVector(_voxelDir, effectiveExtrude * Math.max(0, t))
+    _voxelPos.copy(positions[id]).addScaledVector(_voxelDir, effectiveExtrude * Math.max(0, t) + EXTRUDE * Math.max(0, rT))
     _voxelMat.setPosition(_voxelPos)
     mesh.setMatrixAt(id, _voxelMat)
 
@@ -165,6 +177,14 @@ function tickWaveSimulation(
     } else {
       s[0] = t; s[1] = v
     }
+  }
+
+  for (const [id, s] of rippleVoxels) {
+    if (activeVoxels.has(id) || hoverVoxels.has(id)) continue
+    _voxelDir.copy(positions[id]).normalize()
+    _voxelPos.copy(positions[id]).addScaledVector(_voxelDir, EXTRUDE * Math.max(0, s[0]))
+    _voxelMat.setPosition(_voxelPos)
+    mesh.setMatrixAt(id, _voxelMat)
   }
 
   const cursor = cursorRef.current
@@ -186,9 +206,10 @@ function tickWaveSimulation(
       : 0
     const newHt = ht + (target - ht) * HOVER_LERP
     const waveT = activeVoxels.get(id)?.[0] ?? 0
+    const rT    = rippleVoxels.get(id)?.[0] ?? 0
 
     _voxelDir.copy(positions[id]).normalize()
-    _voxelPos.copy(positions[id]).addScaledVector(_voxelDir, effectiveExtrude * (Math.max(0, waveT) + newHt))
+    _voxelPos.copy(positions[id]).addScaledVector(_voxelDir, effectiveExtrude * (Math.max(0, waveT) + newHt) + EXTRUDE * Math.max(0, rT))
     _voxelMat.setPosition(_voxelPos)
     mesh.setMatrixAt(id, _voxelMat)
 
@@ -304,9 +325,11 @@ export default function CubeScene() {
       const { scene, camera, renderer, controls } = setupRenderer(ref.current!)
       const { mesh, positions } = await buildGlobe(scene)
 
-      const activeVoxels = new Map<number, VoxelState>()
-      const hoverVoxels  = new Map<number, number>()
+      const activeVoxels  = new Map<number, VoxelState>()
+      const rippleVoxels  = new Map<number, VoxelState>()
+      const hoverVoxels   = new Map<number, number>()
       const packets: WavePacket[] = []
+      const ripples: Ripple[] = []
       const cursorRef: { current: THREE.Vector3 | null } = { current: null }
       const highlightRef = { current: -1 }
 
@@ -372,14 +395,17 @@ export default function CubeScene() {
       window.addEventListener('resize', onResize)
 
       const stopHover = setupHover(renderer, camera, scene, packets, cursorRef, updateHighlight)
-      const stopAnimation = startAnimation(renderer, scene, camera, controls, () =>
-        tickWaveSimulation(mesh, positions, scene, camera, activeVoxels, packets, hoverVoxels, cursorRef)
-      )
+      const stopRipple = setupRippleClick(renderer.domElement, camera, scene, ripples)
+      const stopAnimation = startAnimation(renderer, scene, camera, controls, () => {
+        tickRipples(ripples, positions, rippleVoxels, camera, scene)
+        tickWaveSimulation(mesh, positions, scene, camera, activeVoxels, packets, hoverVoxels, cursorRef, rippleVoxels)
+      })
 
       return () => {
         window.removeEventListener('resize', onResize)
         controls.removeEventListener('change', onCameraChange)
         stopHover()
+        stopRipple()
         stopAnimation()
       }
     }
