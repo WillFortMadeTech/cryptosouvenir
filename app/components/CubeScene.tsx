@@ -5,6 +5,8 @@ import { CUBE_SIZE, CUBE_COLOR, SHOW_HEMISPHERE_COLORS } from '@/lib/constants'
 import * as THREE from 'three'
 import { Cell } from './Cube'
 import { type Ripple, tickRipples, setupRippleClick } from './ripple'
+import { setupTypingEffect } from './typingEffect'
+import { textScene, orthoCamera, updateOrthoAspect } from './textScene'
 
 const EXTRUDE           = 0.05
 const SPHERE_RADIUS     = 5
@@ -295,14 +297,21 @@ function startAnimation(
   scene: THREE.Scene,
   camera: THREE.PerspectiveCamera,
   controls: OrbitControls,
-  onFrame: () => void
+  onFrame: () => void,
+  overlay?: { scene: THREE.Scene; camera: THREE.Camera }
 ) {
+  renderer.autoClear = false
   let animId: number
   const animate = () => {
     animId = requestAnimationFrame(animate)
     onFrame()
     controls.update()
+    renderer.clear()
     renderer.render(scene, camera)
+    if (overlay) {
+      renderer.clearDepth()
+      renderer.render(overlay.scene, overlay.camera)
+    }
   }
   animate()
   return () => { cancelAnimationFrame(animId); renderer.dispose() }
@@ -379,10 +388,14 @@ export default function CubeScene() {
       }
       controls.addEventListener('change', onCameraChange)
 
+      updateOrthoAspect(window.innerWidth / window.innerHeight)
+
       const onResize = () => {
+        const aspect = window.innerWidth / window.innerHeight
         renderer.setSize(window.innerWidth, window.innerHeight)
-        camera.aspect = window.innerWidth / window.innerHeight
+        camera.aspect = aspect
         camera.updateProjectionMatrix()
+        updateOrthoAspect(aspect)
       }
       window.addEventListener('resize', onResize)
 
@@ -441,11 +454,15 @@ export default function CubeScene() {
 
       const stopHover = setupHover(renderer, camera, scene, packets, cursorRef, updateHighlight)
       const stopRipple = setupRippleClick(renderer.domElement, camera, scene, ripples)
+      const { tick: tickTyping, cleanup: cleanupTyping } = setupTypingEffect(
+        () => camAnim.inPanel && !camAnim.active
+      )
       const stopAnimation = startAnimation(renderer, scene, camera, controls, () => {
         tickCameraAnim()
+        tickTyping()
         tickRipples(ripples, positions, rippleVoxels, camera, scene)
         tickWaveSimulation(mesh, positions, scene, camera, activeVoxels, packets, hoverVoxels, cursorRef, rippleVoxels)
-      })
+      }, { scene: textScene, camera: orthoCamera })
 
       return () => {
         window.removeEventListener('resize', onResize)
@@ -454,6 +471,7 @@ export default function CubeScene() {
         renderer.domElement.removeEventListener('pointerup', onPointerUp)
         stopHover()
         stopRipple()
+        cleanupTyping()
         stopAnimation()
       }
     }
