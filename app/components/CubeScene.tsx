@@ -6,6 +6,7 @@ import * as THREE from 'three'
 import { Cell } from './Cube'
 import { type Ripple, tickRipples, setupRippleClick } from './ripple'
 import { setupTypingEffect } from './typingEffect'
+import { setupIndicator } from './indicator'
 import { textScene, orthoCamera, updateOrthoAspect } from './textScene'
 
 const EXTRUDE           = 0.05
@@ -72,7 +73,7 @@ async function buildGlobe(scene: THREE.Scene) {
     positions.push(new THREE.Vector3(x, y, z))
   }
   scene.add(mesh)
-  return { mesh, positions }
+  return { mesh, positions, cells }
 }
 
 const blueColor = new THREE.Color(0x0044ff)
@@ -320,11 +321,13 @@ function startAnimation(
 export default function CubeScene() {
   const ref         = useRef<HTMLDivElement>(null)
   const vignetteRef = useRef<HTMLDivElement>(null)
+  const fileInputRef = useRef<HTMLInputElement>(null)
+  const imgRef       = useRef<HTMLImageElement>(null)
 
   useEffect(() => {
     const init = async () => {
       const { scene, camera, renderer, controls } = setupRenderer(ref.current!)
-      const { mesh, positions } = await buildGlobe(scene)
+      const { mesh, positions, cells } = await buildGlobe(scene)
 
       const activeVoxels  = new Map<number, VoxelState>()
       const rippleVoxels  = new Map<number, VoxelState>()
@@ -334,10 +337,38 @@ export default function CubeScene() {
       const cursorRef: { current: THREE.Vector3 | null } = { current: null }
       const highlightRef = { current: -1 }
 
+      const claimedColors = new Map<number, THREE.Color>()
+
+      // Build cube_id → mesh index map for loading persisted colors
+      const cubeIdToIndex = new Map<string, number>()
+      for (let i = 0; i < cells.length; i++) {
+        const c = cells[i]
+        cubeIdToIndex.set(`${c.lat.toFixed(6)}:${c.lng.toFixed(6)}`, i)
+      }
+
       const getVoxelBaseColor = (id: number, localCam: THREE.Vector3) => {
+        const claimed = claimedColors.get(id)
+        if (claimed) return claimed
         if (SHOW_HEMISPHERE_COLORS && positions[id].dot(localCam) > SPHERE_RADIUS_SQ) return blueColor
         return baseColor
       }
+
+      // Load persisted claimed cube colors from the database
+      fetch('/api/cubes')
+        .then(r => r.json())
+        .then((items: { cube_id: string; color: string }[]) => {
+          let changed = false
+          for (const { cube_id, color } of items) {
+            const idx = cubeIdToIndex.get(cube_id)
+            if (idx === undefined) continue
+            const c = new THREE.Color(color)
+            claimedColors.set(idx, c)
+            mesh.setColorAt(idx, c)
+            changed = true
+          }
+          if (changed) mesh.instanceColor!.needsUpdate = true
+        })
+        .catch(() => { /* silent — colors just won't be pre-loaded */ })
 
       const updateHighlight = () => {
         const dist = camera.position.length()
@@ -407,10 +438,14 @@ export default function CubeScene() {
       const camAnim = {
         active: false,
         inPanel: false,
-        targetPos: new THREE.Vector3(0, 0, 15),
-        targetLook: new THREE.Vector3(0, 0, 0),
-        targetQ: scene.quaternion.clone(),
+        targetPos:   new THREE.Vector3(0, 0, 15),
+        targetLook:  new THREE.Vector3(0, 0, 0),
+        targetQ:     scene.quaternion.clone(),
+        savedPos:    new THREE.Vector3(0, 0, 15),
+        savedTarget: new THREE.Vector3(0, 0, 0),
+        savedQ:      new THREE.Quaternion(),
       }
+      const selectedCubeRef = { current: -1 }
 
       const tickCameraAnim = () => {
         if (!camAnim.active) return
@@ -426,9 +461,21 @@ export default function CubeScene() {
         ) {
           camera.position.copy(camAnim.targetPos)
           controls.target.copy(camAnim.targetLook)
+          scene.quaternion.copy(camAnim.targetQ)
           camera.lookAt(controls.target)
           camAnim.active = false
-          if (!camAnim.inPanel) controls.enabled = true
+          if (!camAnim.inPanel) {
+            controls.enabled = true
+          } else if (selectedCubeRef.current !== -1) {
+            const pos = positions[selectedCubeRef.current]
+            indicator.showLine(pos)
+            indicator.startEmitting(pos)
+            if (viewModeRef.current) {
+              fetchAndShowSubmission(selectedCubeRef.current)
+            } else {
+              claimCube(selectedCubeRef.current)
+            }
+          }
         }
       }
 
@@ -438,6 +485,11 @@ export default function CubeScene() {
         const dx = e.clientX - downX, dy = e.clientY - downY
         if (dx * dx + dy * dy > 25) return
         if (camAnim.inPanel || highlightRef.current === -1) return
+        camAnim.savedPos.copy(camera.position)
+        camAnim.savedTarget.copy(controls.target)
+        camAnim.savedQ.copy(scene.quaternion)
+        selectedCubeRef.current = highlightRef.current
+        viewModeRef.current = claimedColors.has(highlightRef.current)
         const localDir = positions[highlightRef.current].clone().normalize()
         camAnim.targetQ.setFromUnitVectors(localDir, PANEL_CUBE_DIR)
         camAnim.inPanel = true
@@ -452,14 +504,118 @@ export default function CubeScene() {
       renderer.domElement.addEventListener('pointerdown', onPointerDown)
       renderer.domElement.addEventListener('pointerup', onPointerUp)
 
-      const stopHover = setupHover(renderer, camera, scene, packets, cursorRef, updateHighlight)
-      const stopRipple = setupRippleClick(renderer.domElement, camera, scene, ripples)
-      const { tick: tickTyping, cleanup: cleanupTyping } = setupTypingEffect(
-        () => camAnim.inPanel && !camAnim.active
+      const stopHover   = setupHover(renderer, camera, scene, packets, cursorRef, updateHighlight)
+      const stopRipple  = setupRippleClick(renderer.domElement, camera, scene, ripples)
+      const indicator   = setupIndicator(scene)
+
+      const fileRef:  { current: File | null } = { current: null }
+      const claimRef: { current: { token: string; color: string; cubeId: string; cubeIdx: number } | null } = { current: null }
+
+      const claimCube = async (cubeIdx: number) => {
+        const cell   = cells[cubeIdx]
+        const cubeId = `${cell.lat.toFixed(6)}:${cell.lng.toFixed(6)}`
+        try {
+          const res = await fetch('/api/claim', {
+            method:  'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body:    JSON.stringify({ cube_id: cubeId }),
+          })
+          if (!res.ok) return // cube already claimed — leave default color
+          const { token, color } = await res.json()
+          if (selectedCubeRef.current !== cubeIdx) return // user already backed out
+          claimRef.current = { token, color, cubeId, cubeIdx }
+          const c = new THREE.Color(color)
+          mesh.setColorAt(cubeIdx, c)
+          mesh.instanceColor!.needsUpdate = true
+        } catch { /* silent — network error, color stays default */ }
+      }
+
+      const fetchAndShowSubmission = async (cubeIdx: number) => {
+        const cell   = cells[cubeIdx]
+        const cubeId = `${cell.lat.toFixed(6)}:${cell.lng.toFixed(6)}`
+        try {
+          const res = await fetch(`/api/submission?cube_id=${encodeURIComponent(cubeId)}`)
+          if (!res.ok) return
+          const { title, description, s3_key } = await res.json()
+          showInfo(title, description)
+          if (imgRef.current && s3_key) {
+            imgRef.current.src = `/api/image?key=${encodeURIComponent(s3_key)}`
+            imgRef.current.style.display = 'block'
+          }
+        } catch { /* silent */ }
+      }
+
+      const handleSubmit = async (title: string, desc: string) => {
+        if (!fileRef.current || !claimRef.current) return
+        const form = new FormData()
+        form.set('title', title)
+        form.set('description', desc)
+        form.set('image', fileRef.current)
+        form.set('token', claimRef.current.token)
+        try {
+          const res = await fetch('/api/submit', { method: 'POST', body: form })
+          if (res.ok) {
+            // Register in claimedColors BEFORE clearing claimRef so goBack doesn't revert it
+            const { cubeIdx, color } = claimRef.current
+            claimedColors.set(cubeIdx, new THREE.Color(color))
+            claimRef.current = null
+            goBackRef.current()
+          }
+        } catch (err) {
+          console.error('Submit failed:', err)
+        }
+      }
+
+      const goBackRef    = { current: () => {} }
+      const viewModeRef  = { current: false }
+
+      const { tick: tickTyping, cleanup: cleanupTyping, resetForm, setUploadFile, showInfo, hideInfo } = setupTypingEffect(
+        () => camAnim.inPanel && !camAnim.active && !viewModeRef.current,
+        () => goBackRef.current(),
+        () => fileInputRef.current?.click(),
+        handleSubmit,
       )
+
+      const fileInput = fileInputRef.current!
+      const handleFileChange = () => {
+        const file = fileInput.files?.[0] ?? null
+        fileRef.current = file
+        setUploadFile(file?.name ?? '')
+      }
+      fileInput.addEventListener('change', handleFileChange)
+
+      const goBack = () => {
+        indicator.stopEmitting()
+        indicator.hideLine()
+        if (viewModeRef.current) {
+          hideInfo()
+          if (imgRef.current) { imgRef.current.style.display = 'none'; imgRef.current.src = '' }
+          viewModeRef.current = false
+        } else {
+          if (claimRef.current && selectedCubeRef.current !== -1) {
+            _invMat.copy(scene.matrixWorld).invert()
+            _localCam.copy(camera.position).applyMatrix4(_invMat)
+            mesh.setColorAt(selectedCubeRef.current, getVoxelBaseColor(selectedCubeRef.current, _localCam))
+            mesh.instanceColor!.needsUpdate = true
+            claimRef.current = null
+          }
+          fileRef.current = null
+          if (fileInput) fileInput.value = ''
+          resetForm()
+        }
+        camAnim.inPanel = false
+        camAnim.active  = true
+        camAnim.targetPos.copy(camAnim.savedPos)
+        camAnim.targetLook.copy(camAnim.savedTarget)
+        camAnim.targetQ.copy(camAnim.savedQ)
+        selectedCubeRef.current = -1
+      }
+      goBackRef.current = goBack
+
       const stopAnimation = startAnimation(renderer, scene, camera, controls, () => {
         tickCameraAnim()
         tickTyping()
+        indicator.tick()
         tickRipples(ripples, positions, rippleVoxels, camera, scene)
         tickWaveSimulation(mesh, positions, scene, camera, activeVoxels, packets, hoverVoxels, cursorRef, rippleVoxels)
       }, { scene: textScene, camera: orthoCamera })
@@ -469,9 +625,11 @@ export default function CubeScene() {
         controls.removeEventListener('change', onCameraChange)
         renderer.domElement.removeEventListener('pointerdown', onPointerDown)
         renderer.domElement.removeEventListener('pointerup', onPointerUp)
+        fileInput.removeEventListener('change', handleFileChange)
         stopHover()
         stopRipple()
         cleanupTyping()
+        indicator.cleanup()
         stopAnimation()
       }
     }
@@ -482,6 +640,18 @@ export default function CubeScene() {
   return (
     <div style={{ position: 'relative' }}>
       <div ref={ref} />
+      <input ref={fileInputRef} type="file" accept="image/*" style={{ display: 'none' }} />
+      <img ref={imgRef} alt="" style={{
+        display: 'none',
+        position: 'absolute',
+        bottom: '8%',
+        left: '8%',
+        width: '28%',
+        maxHeight: '35%',
+        objectFit: 'contain',
+        border: '1px solid rgba(255,255,255,0.15)',
+        borderRadius: 2,
+      }} />
       <div ref={vignetteRef} style={{
         position: 'absolute',
         inset: 0,

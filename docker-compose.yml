@@ -1,10 +1,10 @@
 services:
   web:
     build:
-      context: ./app 
+      context: ./app
       dockerfile: Dockerfile
     volumes:
-      - ./app:/app 
+      - ./app:/app
       - /app/node_modules
     ports:
       - "3000:3000"
@@ -12,3 +12,27 @@ services:
       - .env
     environment:
       - WATCHPACK_POLLING=true
+    depends_on:
+      localstack:
+        condition: service_healthy
+    command: sh -c "npm install && npm run dev"
+
+  localstack:
+    image: localstack/localstack:4.4.0
+    ports:
+      - "4566:4566"
+    environment:
+      - SERVICES=s3,dynamodb
+      - DEBUG=0
+    volumes:
+      - ./localstack/init/ready.d:/etc/localstack/init/ready.d
+      - localstack-data:/var/lib/localstack
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:4566/_localstack/health"]
+      interval: 3s
+      timeout: 5s
+      retries: 20
+      start_period: 10s
+
+volumes:
+  localstack-data:
