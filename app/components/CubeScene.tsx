@@ -323,6 +323,7 @@ export default function CubeScene() {
   const vignetteRef = useRef<HTMLDivElement>(null)
   const fileInputRef = useRef<HTMLInputElement>(null)
   const imgRef       = useRef<HTMLImageElement>(null)
+  const sigInfoRef   = useRef<HTMLDivElement>(null)
 
   useEffect(() => {
     const init = async () => {
@@ -536,23 +537,96 @@ export default function CubeScene() {
         try {
           const res = await fetch(`/api/submission?cube_id=${encodeURIComponent(cubeId)}`)
           if (!res.ok) return
-          const { title, description, s3_key } = await res.json()
+          const { title, description, s3_key, timestamp, key_fingerprint, device_name } = await res.json()
           showInfo(title, description)
           if (imgRef.current && s3_key) {
             imgRef.current.src = `/api/image?key=${encodeURIComponent(s3_key)}`
             imgRef.current.style.display = 'block'
+          }
+          if (sigInfoRef.current) {
+            const row = (label: string, value: string, mono = false) => {
+              const wrap = document.createElement('div')
+              wrap.style.marginTop = '8px'
+              const lbl = document.createElement('div')
+              lbl.textContent = label
+              lbl.style.cssText = 'opacity:0.4;font-size:9px;letter-spacing:0.14em'
+              const val = document.createElement('div')
+              val.textContent = value
+              if (mono) { val.style.fontFamily = '"Courier New",monospace'; val.style.wordBreak = 'break-all'; val.style.textTransform = 'none' }
+              wrap.appendChild(lbl)
+              wrap.appendChild(val)
+              return wrap
+            }
+            sigInfoRef.current.replaceChildren()
+            if (device_name)     sigInfoRef.current.appendChild(row('SIGNED WITH', device_name))
+            if (key_fingerprint) sigInfoRef.current.appendChild(row('KEY FINGERPRINT', `SHA256:${key_fingerprint}`, true))
+            if (timestamp)       sigInfoRef.current.appendChild(row('', new Date(timestamp).toLocaleString(undefined, { month: 'short', day: 'numeric', year: 'numeric', hour: '2-digit', minute: '2-digit' })))
+            sigInfoRef.current.style.display = 'block'
           }
         } catch { /* silent */ }
       }
 
       const handleSubmit = async (title: string, desc: string) => {
         if (!fileRef.current || !claimRef.current) return
-        const form = new FormData()
-        form.set('title', title)
-        form.set('description', desc)
-        form.set('image', fileRef.current)
-        form.set('token', claimRef.current.token)
         try {
+          // Get a server-issued challenge
+          const challengeRes = await fetch('/api/webauthn/challenge', {
+            method:  'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body:    JSON.stringify({ cube_id: claimRef.current.cubeId }),
+          })
+          if (!challengeRes.ok) return
+          const { challenge_id, challenge, rp_id, rp_name } = await challengeRes.json()
+
+          // base64url ↔ ArrayBuffer helpers
+          const fromB64url = (s: string) =>
+            Uint8Array.from(atob(s.replace(/-/g, '+').replace(/_/g, '/')), c => c.charCodeAt(0))
+          const toB64url = (buf: ArrayBuffer) =>
+            btoa(String.fromCharCode(...new Uint8Array(buf)))
+              .replace(/\+/g, '-').replace(/\//g, '_').replace(/=/g, '')
+
+          // Run the WebAuthn signing ceremony via native browser API
+          const cred = await navigator.credentials.create({
+            publicKey: {
+              challenge:   fromB64url(challenge),
+              rp:          { id: rp_id, name: rp_name },
+              user: {
+                id:          new TextEncoder().encode(claimRef.current.cubeId),
+                name:        claimRef.current.cubeId,
+                displayName: 'CryptoSouvenir',
+              },
+              pubKeyCredParams: [
+                { alg: -7,   type: 'public-key' },
+                { alg: -257, type: 'public-key' },
+              ],
+              timeout:    60000,
+              attestation: 'direct',
+              authenticatorSelection: { userVerification: 'preferred' },
+            },
+          }) as PublicKeyCredential | null
+          if (!cred) return
+
+          const attResp = cred.response as AuthenticatorAttestationResponse
+          const attestationJSON = {
+            id:    cred.id,
+            rawId: cred.id,
+            response: {
+              clientDataJSON:    toB64url(attResp.clientDataJSON),
+              attestationObject: toB64url(attResp.attestationObject),
+              transports:        attResp.getTransports?.() ?? [],
+            },
+            type: 'public-key',
+            clientExtensionResults: cred.getClientExtensionResults(),
+          }
+
+          const form = new FormData()
+          form.set('title', title)
+          form.set('description', desc)
+          form.set('image', fileRef.current)
+          form.set('token', claimRef.current.token)
+          form.set('challenge_id', challenge_id)
+          form.set('attestation', JSON.stringify(attestationJSON))
+
           const res = await fetch('/api/submit', { method: 'POST', body: form })
           if (res.ok) {
             // Register in claimedColors BEFORE clearing claimRef so goBack doesn't revert it
@@ -589,7 +663,8 @@ export default function CubeScene() {
         indicator.hideLine()
         if (viewModeRef.current) {
           hideInfo()
-          if (imgRef.current) { imgRef.current.style.display = 'none'; imgRef.current.src = '' }
+          if (imgRef.current)    { imgRef.current.style.display = 'none'; imgRef.current.src = '' }
+          if (sigInfoRef.current) sigInfoRef.current.style.display = 'none'
           viewModeRef.current = false
         } else {
           if (claimRef.current && selectedCubeRef.current !== -1) {
@@ -651,6 +726,20 @@ export default function CubeScene() {
         objectFit: 'contain',
         border: '1px solid rgba(255,255,255,0.15)',
         borderRadius: 2,
+      }} />
+      <div ref={sigInfoRef} style={{
+        display: 'none',
+        position: 'absolute',
+        bottom: '8%',
+        right: '5%',
+        fontFamily: '"Courier New", monospace',
+        fontSize: '10px',
+        color: 'rgba(255,255,255,0.75)',
+        textAlign: 'right',
+        textTransform: 'uppercase',
+        letterSpacing: '0.1em',
+        lineHeight: 1.5,
+        pointerEvents: 'none',
       }} />
       <div ref={vignetteRef} style={{
         position: 'absolute',

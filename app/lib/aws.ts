@@ -21,6 +21,7 @@ export const dynamo = DynamoDBDocumentClient.from(
   new DynamoDBClient({ region, endpoint, credentials })
 )
 
-export const BUCKET       = process.env.S3_BUCKET            ?? 'cryptosouvenir-uploads'
-export const TABLE        = process.env.DYNAMODB_TABLE       ?? 'cryptosouvenir-submissions'
-export const CUBES_TABLE  = process.env.DYNAMODB_CUBES_TABLE ?? 'cryptosouvenir-cubes'
+export const BUCKET            = process.env.S3_BUCKET                   ?? 'cryptosouvenir-uploads'
+export const TABLE             = process.env.DYNAMODB_TABLE              ?? 'cryptosouvenir-submissions'
+export const CUBES_TABLE       = process.env.DYNAMODB_CUBES_TABLE        ?? 'cryptosouvenir-cubes'
+export const CHALLENGES_TABLE  = process.env.DYNAMODB_CHALLENGES_TABLE   ?? 'cryptosouvenir-challenges'

@@ -12,6 +12,6 @@ export async function GET(req: NextRequest) {
   const sub = await dynamo.send(new GetCommand({ TableName: TABLE, Key: { id: cube.Item.submission_id } }))
   if (!sub.Item) return NextResponse.json({ error: 'Not found' }, { status: 404 })
 
-  const { title, description, s3_key, timestamp } = sub.Item
-  return NextResponse.json({ title, description, s3_key, timestamp, color: cube.Item.color })
+  const { title, description, s3_key, timestamp, key_fingerprint, device_name, user_verified } = sub.Item
+  return NextResponse.json({ title, description, s3_key, timestamp, color: cube.Item.color, key_fingerprint, device_name, user_verified })
 }
